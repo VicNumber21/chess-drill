@@ -1,3 +1,20 @@
+// TODO: it is experimental for this or that. Refactor when it is clear how to implement modules.
+// TODO: use modern JavaScript. The only requirement for Browser is Chrome on desktop and Safari in iOS
+// TODO: contribute into chessboard instead of hacking it?
+
+var db = new Dexie('my-chess-openings');
+// TODO: check if all fields should be indexed
+// TODO check if names and moves should be in separate tables
+db.version(1).stores({
+  positions: '++id,&fen,*names',
+  moves: 'from,to,san,rating,&[from+san]',
+  names: '++id,&name'
+});
+db.open().catch((error) => {
+  console.error('DB opening error:', error);
+});
+
+
 var board = null;
 var game = new Chess();
 var $board = $('#myBoard');
@@ -104,6 +121,7 @@ function isValidSquare(square) {
   return square.length > 0; //TODO: should be better check
 }
 
+// TODO: touch handling should be added, see how it is implemented in chess board for reference
 $board.on('mousedown', '.square-55d63', function (event) {
   var ret = true;
   var square = $(this).attr('data-square');
@@ -126,7 +144,6 @@ $board.on('mousedown', '.square-55d63', function (event) {
   return ret;
 });
 
-
 var config = {
   draggable: true,
   position: 'start',
@@ -136,3 +153,46 @@ var config = {
 };
 
 board = Chessboard('myBoard', config);
+
+// TODO save names
+async function savePosition(fen) {
+  let positionId;
+
+  try {
+    positionId = await db.positions.add({fen: fen, names: []});
+  }
+  catch(error) {
+    const position = await db.positions.get({fen: fen});
+    positionId = position.id;
+  }
+
+  return positionId;
+}
+
+$(document).ready(() => {
+  $('#btnSave').click(() => {
+    console.log('Saving history for', game.history(), ', current fen', game.fen());
+
+    const savingHistory = game.history();
+    let savingGame = new Chess();
+
+    db.transaction('rw', db.positions, db.moves, db.names, async () => {
+      for(const move of savingHistory) {
+        const fromFen = savingGame.fen();
+        savingGame.move(move);
+        const toFen = savingGame.fen();
+
+        [fromPositionId, toPositionId] = await Promise.all([savePosition(fromFen), savePosition(toFen)]);
+
+        try {
+          db.moves.add({from: fromPositionId, to: toPositionId, san: move, rating: 'good'});
+        }
+        catch (error) {
+          // TODO how to ignore it just in case the same move is recorded already?
+        }
+      }
+    }).catch((error) => {
+      console.error('DB transaction error', error);
+    });
+  });
+});
